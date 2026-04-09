@@ -45,7 +45,7 @@
       <tbody>
         {% for s in result.top_sql_table %}
           <tr>
-            <td>{{ s.sql_id }}</td><td>{{ s.elapsed }}</td><td>{{ s.cpu }}</td><td>{{ s.buffer_gets }}</td><td>{{ s.dominant_issue }}</td><td>{{ s.recommendation }}</td>
+            <td>{{ s.sql_id }}<br/><span class="muted">{{ s.sql_text }}</span></td><td>{{ s.elapsed }}</td><td>{{ s.cpu }}</td><td>{{ s.buffer_gets }}</td><td>{{ s.dominant_issue }}</td><td>{{ s.recommendation }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -81,7 +81,12 @@
       </tbody>
     </table>
 
-    <h3>Raw JSON</h3>
-    <pre>{{ raw_json }}</pre>
+    <h3>Additional AWR Tuning Highlights</h3>
+    <ul>
+      {% for h in result.awr_highlights %}
+      <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+
   </body>
 </html>

@@ -141,6 +141,27 @@ def _detect_top_sql(text: str) -> List[Dict]:
             cpu = metrics.get("cpu", "n/a")
             gets = metrics.get("buffer gets", "n/a")
 
+            sql_text = ""
+            # Search a wider neighborhood around SQL ID to avoid truncating SQL text.
+            start = max(0, i - 5)
+            end = min(len(lines), i + 120)
+            snippet = "\n".join(lines[start:end])
+
+            # Prefer text explicitly following SQL Text / SQL fulltext style markers.
+            marked_match = re.search(
+                r"(?is)(?:sql\s*text\s*[:\-]?\s*)(select\s+.+?|update\s+.+?|delete\s+from\s+.+?|insert\s+into\s+.+?)(?:\n\s*(?:module|action|parsing schema|plan hash value|elapsed time|cpu time|buffer gets|rows processed|fetches|executions)\b|\Z)",
+                snippet,
+            )
+            if marked_match:
+                sql_text = re.sub(r"\s+", " ", marked_match.group(1)).strip()
+            else:
+                generic_match = re.search(
+                    r"(?is)(select\s+.+?|update\s+.+?|delete\s+from\s+.+?|insert\s+into\s+.+?)(?:\n\s*(?:module|action|parsing schema|plan hash value|elapsed time|cpu time|buffer gets|rows processed|fetches|executions)\b|\Z)",
+                    snippet,
+                )
+                if generic_match:
+                    sql_text = re.sub(r"\s+", " ", generic_match.group(1)).strip()
+
             dominant = "high_elapsed"
             if cpu != "n/a" and elapsed == "n/a":
                 dominant = "high_cpu"
@@ -155,6 +176,7 @@ def _detect_top_sql(text: str) -> List[Dict]:
                     "buffer_gets": gets,
                     "dominant_issue": dominant.replace("_", " "),
                     "recommendation": SQL_RECOMMENDATION_MAP[dominant],
+                    "sql_text": sql_text or "SQL text not confidently parsed from uploaded AWR snippet.",
                 }
             )
 
@@ -201,6 +223,19 @@ def run_deterministic_analysis(files: List[Path], user_question: str = "") -> Di
     errors = _detect_oracle_errors(text)
     sql_signals = _detect_sql_signals(text)
     top_sql = _detect_top_sql(text)
+
+    highlights = []
+    ltext = text.lower()
+    if "host cpu" in ltext or "cpu time" in ltext:
+        highlights.append("CPU pressure markers found (Host CPU/CPU Time) — correlate with top SQL CPU consumers.")
+    if "db time" in ltext:
+        highlights.append("DB Time markers present — validate DB Time concentration by wait class and top SQL.")
+    if "physical reads" in ltext or "physical read total bytes" in ltext:
+        highlights.append("Physical IO intensity detected — review storage latency and full-scan SQL patterns.")
+    if "pga" in ltext or "sga" in ltext:
+        highlights.append("Memory advisories/markers present — review PGA/SGA sizing against workload profile.")
+    if "library cache" in ltext or "parse" in ltext:
+        highlights.append("Parse/library cache signals present — check hard-parse rate and cursor sharing strategy.")
 
     findings = []
     for e in wait_events[:6]:
@@ -311,6 +346,7 @@ def run_deterministic_analysis(files: List[Path], user_question: str = "") -> Di
         "findings_table": findings,
         "module_status_table": module_table,
         "recommendations_table": recommendations,
+        "awr_highlights": highlights,
         "focus": user_question or "General Oracle performance triage",
     }
 

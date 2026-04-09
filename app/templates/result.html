@@ -16,6 +16,7 @@
       .downloads a { margin-right: 10px; display: inline-block; margin-bottom: 8px; color: #2f67e3; }
       pre { background: #f7fbff; padding: 10px; border-radius: 8px; overflow: auto; border: 1px solid #dbe7f6; }
       a { color: #2f67e3; }
+      .back-btn { background:#2f67e3; color:#fff; border:none; border-radius:8px; padding:10px 14px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
     </style>
   </head>
   <body>
@@ -60,7 +61,13 @@
           <tbody>
             {% for s in result.top_sql_table %}
               <tr>
-                <td>{{ s.sql_id }}</td>
+                <td>
+                  <details>
+                    <summary><a href="javascript:void(0)">{{ s.sql_id }}</a></summary>
+                    <div style="margin-top:6px"><b>Parsed SQL Text:</b></div>
+                    <pre style="white-space:pre-wrap">{{ s.sql_text }}</pre>
+                  </details>
+                </td>
                 <td>{{ s.elapsed }}</td>
                 <td>{{ s.cpu }}</td>
                 <td>{{ s.buffer_gets }}</td>
@@ -122,6 +129,15 @@
         </table>
       </div>
 
+      <div class="card">
+        <h3>Additional AWR Tuning Highlights</h3>
+        <ul>
+          {% for h in result.awr_highlights %}
+          <li>{{ h }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+
       <div class="card downloads">
         <h3>Download Reports</h3>
         <a href="/download/{{ report_id }}/full-html">Full HTML Report</a>
@@ -132,12 +148,7 @@
         <a href="/download/{{ report_id }}/recommendations">Recommendations CSV</a>
       </div>
 
-      <div class="card">
-        <h3>Raw JSON</h3>
-        <pre>{{ raw_json }}</pre>
-      </div>
-
-      <div class="card"><a href="/">← Analyze another file set</a></div>
+      <div class="card"><a class="back-btn" href="/">Analyze another file set</a></div>
     </div>
   </body>
 </html>

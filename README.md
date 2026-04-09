@@ -35,11 +35,23 @@ python run.py
 
 Open: `http://localhost:8080`
 
+Production-style local run:
+
+```bash
+gunicorn -w 2 -k gthread -b 0.0.0.0:8080 app.main:app
+```
+
 ## Run with Docker
 
 ```bash
 docker build -t awr-deterministic-miner .
 docker run --rm -p 8080:8080 awr-deterministic-miner
+```
+
+If port 8080 is already in use:
+
+```bash
+docker run --rm -p 8081:8080 awr-deterministic-miner
 ```
 
 The container runs Gunicorn bound to `0.0.0.0:8080`.
