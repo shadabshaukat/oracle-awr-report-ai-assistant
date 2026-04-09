@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ app_name }} - Export</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; color: #1b2a41; }
+      h2, h3 { margin-bottom: 8px; }
+      .pill { display:inline-block; padding:4px 10px; border:1px solid #d9e1ec; border-radius:999px; margin-right:8px; }
+      table { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+      th, td { border: 1px solid #d9e1ec; padding: 8px; text-align: left; vertical-align: top; }
+      th { background: #f3f8ff; }
+      .muted { color:#5b6b7e; }
+      pre { background:#f7fbff; border:1px solid #dbe7f6; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <h2>{{ app_name }}</h2>
+    <div>
+      <span class="pill">Mode: {{ analysis_mode }}</span>
+      <span class="pill">Overall: {{ severity_badge(result.overall_severity) }} {{ result.overall_severity }}</span>
+    </div>
+    <p class="muted">Exported deterministic AWR mining report</p>
+
+    <h3>Executive Summary</h3>
+    <p>{{ result.executive_summary }}</p>
+
+    <h3>Top Wait Events / Bottlenecks</h3>
+    <table>
+      <thead><tr><th>Event</th><th>Category</th><th>Hits</th><th>Impact</th><th>Severity</th><th>Bottleneck</th><th>Recommendation</th></tr></thead>
+      <tbody>
+        {% for r in result.wait_events_table %}
+          <tr>
+            <td>{{ r.event }}</td><td>{{ r.category }}</td><td>{{ r.hits }}</td><td>{{ r.impact_score }}</td>
+            <td>{{ severity_badge(r.severity) }} {{ r.severity }}</td><td>{{ r.bottleneck }}</td><td>{{ r.recommendation }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Top SQL Table</h3>
+    <table>
+      <thead><tr><th>SQL ID</th><th>Elapsed</th><th>CPU</th><th>Buffer Gets</th><th>Dominant Issue</th><th>Recommendation</th></tr></thead>
+      <tbody>
+        {% for s in result.top_sql_table %}
+          <tr>
+            <td>{{ s.sql_id }}</td><td>{{ s.elapsed }}</td><td>{{ s.cpu }}</td><td>{{ s.buffer_gets }}</td><td>{{ s.dominant_issue }}</td><td>{{ s.recommendation }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Findings</h3>
+    <table>
+      <thead><tr><th>Finding</th><th>Severity</th><th>Evidence</th><th>Business Impact</th></tr></thead>
+      <tbody>
+        {% for f in result.findings_table %}
+        <tr><td>{{ f.finding }}</td><td>{{ severity_badge(f.severity) }} {{ f.severity }}</td><td>{{ f.evidence }}</td><td>{{ f.business_impact }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Module Status</h3>
+    <table>
+      <thead><tr><th>Module</th><th>Status</th><th>Insight</th></tr></thead>
+      <tbody>
+        {% for m in result.module_status_table %}
+        <tr><td>{{ m.module }}</td><td>{{ severity_badge(m.status) }} {{ m.status }}</td><td>{{ m.insight }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Recommendations</h3>
+    <table>
+      <thead><tr><th>Priority</th><th>Area</th><th>Recommendation</th><th>Expected Outcome</th></tr></thead>
+      <tbody>
+        {% for r in result.recommendations_table %}
+        <tr><td>{{ r.priority }}</td><td>{{ r.area }}</td><td>{{ r.recommendation }}</td><td>{{ r.expected_outcome }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h3>Raw JSON</h3>
+    <pre>{{ raw_json }}</pre>
+  </body>
+</html>

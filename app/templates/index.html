@@ -5,39 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ app_name }}</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 0; background: #0b1020; color: #e6edf7; }
+      body { font-family: Arial, sans-serif; margin: 0; background: #ffffff; color: #1b2a41; }
       .container { max-width: 1050px; margin: 24px auto; padding: 20px; }
-      .card { background: #141a2e; border: 1px solid #28314f; border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+      .card { background: #ffffff; border: 1px solid #d9e1ec; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 3px 18px rgba(16,24,40,0.06); }
       .title { font-size: 1.6rem; font-weight: 700; margin-bottom: 8px; }
-      .muted { color: #a8b2c8; }
-      .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #1f2742; margin-right: 8px; }
+      .muted { color: #5b6b7e; }
+      .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #eef4ff; margin-right: 8px; }
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
-      .module { background: #1a223b; border: 1px solid #2e3a62; border-radius: 10px; padding: 10px; }
-      input, textarea { width: 100%; margin-top: 8px; margin-bottom: 14px; border-radius: 8px; border: 1px solid #36436d; background: #0e1529; color: white; padding: 10px; }
+      .module { background: #f8fbff; border: 1px solid #dbe7f6; border-radius: 10px; padding: 10px; }
+      input, textarea, select { width: 100%; margin-top: 8px; margin-bottom: 14px; border-radius: 8px; border: 1px solid #c9d8eb; background: #fff; color: #1b2a41; padding: 10px; box-sizing: border-box; }
       button { background: #4f7cff; color: white; border: 0; border-radius: 8px; padding: 12px 16px; font-weight: 700; cursor: pointer; }
+      .dropzone { border: 2px dashed #9cb5d6; border-radius: 12px; padding: 24px; text-align: center; background: #f7fbff; margin-bottom: 12px; }
+      .dropzone.dragover { background: #eaf4ff; border-color: #4f7cff; }
+      .small { font-size: 0.9rem; color: #5b6b7e; }
+      .overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.92); display:none; align-items:center; justify-content:center; z-index:1000; }
+      .overlay.show { display:flex; }
+      .loader-card { border:1px solid #d9e1ec; background:#fff; border-radius:14px; padding:24px; text-align:center; box-shadow:0 8px 30px rgba(0,0,0,0.1); width: 360px; }
+      .spinner { width:42px; height:42px; border:4px solid #dce7f8; border-top-color:#4f7cff; border-radius:50%; margin: 0 auto 12px; animation: spin 1s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg);} }
     </style>
   </head>
   <body>
+    <div id="loadingOverlay" class="overlay">
+      <div class="loader-card">
+        <div class="spinner"></div>
+        <h3 style="margin: 6px 0;">Analyzing Oracle artifacts</h3>
+        <p class="muted" style="margin:0;">Please wait while the report miner builds findings and recommendations...</p>
+      </div>
+    </div>
     <div class="container">
       <div class="card">
         <div class="title">🔒 {{ app_name }}</div>
-        <p class="muted">AI-Powered Oracle Insights — No DB Connection, No Credentials, No Network Exposure.</p>
-        <span class="pill">Provider: {{ provider }}</span>
-        <span class="pill">Model: {{ model }}</span>
+        <p class="muted">Professional deterministic Oracle AWR mining — no AI model dependencies, no database connection, no credentials.</p>
+        <div>
+          <span class="pill">Mode: Deterministic</span>
+          <span class="pill">Engine: Rule-based AWR Miner</span>
+        </div>
       </div>
 
       <div class="card">
         <h3>Upload & Analyze</h3>
         <p class="muted">Supported files: HTML, TXT, CSV, LOG, SQL</p>
-        <form action="/analyze" method="post" enctype="multipart/form-data">
-          <label>Analysis Mode</label>
-          <select name="analysis_mode" style="width:100%; margin-top:8px; margin-bottom:14px; border-radius:8px; border:1px solid #36436d; background:#0e1529; color:white; padding:10px;">
-            <option value="ai" selected>AI Analysis (LLM-based)</option>
-            <option value="non-ai">Non-AI Analysis (deterministic rules)</option>
-          </select>
+        <form id="analyzeForm" action="/analyze" method="post" enctype="multipart/form-data">
+          <label>Analysis Profile</label>
+          <input type="text" value="Deterministic Oracle AWR Performance Miner" readonly />
 
           <label>Artifacts (AWR / SQL / alert logs / privileges)</label>
-          <input type="file" name="files" multiple required />
+          <div id="dropzone" class="dropzone">
+            <p><b>Drop AWR files here</b> or use browse button below</p>
+            <p class="small">Supports HTML, TXT, CSV, LOG, SQL</p>
+          </div>
+          <input id="filesInput" type="file" name="files" multiple required />
 
           <label>Focus Question (Optional)</label>
           <textarea name="question" rows="4" placeholder="e.g., Why did DB time spike at 2 PM and what are the top 3 fixes?"></textarea>
@@ -55,5 +73,41 @@
         </div>
       </div>
     </div>
+    <script>
+      const dropzone = document.getElementById('dropzone');
+      const input = document.getElementById('filesInput');
+      const form = document.getElementById('analyzeForm');
+      const overlay = document.getElementById('loadingOverlay');
+
+      ['dragenter','dragover'].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.add('dragover');
+        });
+      });
+
+      ['dragleave','drop'].forEach(evt => {
+        dropzone.addEventListener(evt, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.remove('dragover');
+        });
+      });
+
+      dropzone.addEventListener('drop', e => {
+        if (e.dataTransfer.files?.length) {
+          input.files = e.dataTransfer.files;
+        }
+      });
+
+      input.addEventListener('click', () => {
+        input.value = '';
+      });
+
+      form.addEventListener('submit', () => {
+        overlay.classList.add('show');
+      });
+    </script>
   </body>
   </html>
