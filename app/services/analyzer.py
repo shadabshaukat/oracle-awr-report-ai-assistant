@@ -1,4 +1,5 @@
 import csv
+import html
 import io
 import re
 from collections import Counter
@@ -42,7 +43,9 @@ SQL_RECOMMENDATION_MAP = {
 
 def _safe_text(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")[:200000]
+        # Keep full report text so downstream parsing can reliably reach SQL sections
+        # that commonly appear deep in large AWR HTML documents.
+        return path.read_text(encoding="utf-8", errors="ignore")[:5000000]
     except Exception:
         return ""
 
@@ -59,25 +62,122 @@ def _severity_from_impact(score: int) -> str:
     return "GREEN"
 
 
+def _to_float(value: str) -> float:
+    if not value:
+        return 0.0
+    v = value.replace(",", "").strip()
+    if v in {"", "-", "n/a"}:
+        return 0.0
+    if v.startswith("."):
+        v = f"0{v}"
+    try:
+        return float(v)
+    except ValueError:
+        return 0.0
+
+
+def _clean_html_cell(cell: str) -> str:
+    no_tags = re.sub(r"<[^>]+>", " ", cell, flags=re.IGNORECASE)
+    no_tags = html.unescape(no_tags)
+    no_tags = no_tags.replace("\xa0", " ")
+    return re.sub(r"\s+", " ", no_tags).strip()
+
+
+def _extract_table_by_summary(text: str, summary_phrase: str) -> str:
+    pattern = re.compile(
+        rf"<table[^>]*summary=\"[^\"]*{re.escape(summary_phrase)}[^\"]*\"[^>]*>(.*?)</table>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    m = pattern.search(text)
+    return m.group(1) if m else ""
+
+
+def _parse_table_rows(table_html: str) -> List[List[str]]:
+    if not table_html:
+        return []
+    out: List[List[str]] = []
+    row_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.IGNORECASE | re.DOTALL)
+    for row in row_matches:
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = [_clean_html_cell(c) for c in cells]
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _wait_impact_score(percent_db_time: float, total_wait_s: float, avg_wait_ms: float) -> int:
+    # Deterministic score grounded on AWR metrics, not keyword frequency.
+    score = min(10.0, (percent_db_time * 1.8) + min(3.0, total_wait_s / 20.0) + min(2.0, avg_wait_ms / 10.0))
+    return max(1, int(round(score)))
+
+
 def _detect_wait_events(text: str) -> List[Dict]:
-    lower = text.lower()
-    rows = []
-    for event, category, bottleneck in WAIT_EVENT_PATTERNS:
-        hits = len(re.findall(re.escape(event), lower))
-        if hits > 0:
-            score = min(10, hits * 2)
-            rows.append(
-                {
-                    "event": event,
-                    "category": category,
-                    "hits": hits,
-                    "impact_score": score,
-                    "severity": _severity_from_impact(score),
-                    "bottleneck": bottleneck,
-                    "recommendation": _event_recommendation(event),
-                }
-            )
-    rows.sort(key=lambda x: (x["impact_score"], x["hits"]), reverse=True)
+    rows: List[Dict] = []
+
+    fg_table = _extract_table_by_summary(text, "Foreground Wait Events")
+    fg_rows = _parse_table_rows(fg_table)
+    if fg_rows:
+        matched = {}
+        for cols in fg_rows:
+            if not cols:
+                continue
+            event_name = cols[0].lower()
+            for event, category, bottleneck in WAIT_EVENT_PATTERNS:
+                if event in event_name:
+                    total_wait_s = _to_float(cols[3] if len(cols) > 3 else "0")
+                    avg_wait_ms = _to_float(cols[4] if len(cols) > 4 else "0")
+                    pct_db_time = _to_float(cols[6] if len(cols) > 6 else "0")
+                    waits = int(_to_float(cols[1] if len(cols) > 1 else "0"))
+                    score = _wait_impact_score(pct_db_time, total_wait_s, avg_wait_ms)
+                    existing = matched.get(event)
+                    payload = {
+                        "event": event,
+                        "category": category,
+                        "hits": 1,
+                        "impact_score": score,
+                        "severity": _severity_from_impact(score),
+                        "bottleneck": bottleneck,
+                        "recommendation": _event_recommendation(event),
+                        "waits": waits,
+                        "total_wait_s": total_wait_s,
+                        "avg_wait_ms": avg_wait_ms,
+                        "pct_db_time": pct_db_time,
+                    }
+                    if not existing or payload["impact_score"] > existing["impact_score"]:
+                        matched[event] = payload
+        rows = list(matched.values())
+
+    # Fallback for non-standard text inputs where AWR table structure isn't available.
+    if not rows:
+        lower = text.lower()
+        for event, category, bottleneck in WAIT_EVENT_PATTERNS:
+            hits = len(re.findall(re.escape(event), lower))
+            if hits > 0:
+                score = min(6, 1 + hits)
+                rows.append(
+                    {
+                        "event": event,
+                        "category": category,
+                        "hits": hits,
+                        "impact_score": score,
+                        "severity": _severity_from_impact(score),
+                        "bottleneck": bottleneck,
+                        "recommendation": _event_recommendation(event),
+                        "waits": 0,
+                        "total_wait_s": 0,
+                        "avg_wait_ms": 0,
+                        "pct_db_time": 0,
+                    }
+                )
+
+    rows.sort(
+        key=lambda x: (
+            x.get("pct_db_time", 0),
+            x.get("total_wait_s", 0),
+            x["impact_score"],
+        ),
+        reverse=True,
+    )
     return rows[:12]
 
 
@@ -119,76 +219,83 @@ def _detect_sql_signals(text: str) -> List[Dict]:
 
 
 def _detect_top_sql(text: str) -> List[Dict]:
-    rows: List[Dict] = []
-    lines = text.splitlines()
+    sql_map: Dict[str, Dict] = {}
 
-    sqlid_pattern = re.compile(r"\b([0-9a-z]{13})\b", re.IGNORECASE)
-    metric_pattern = re.compile(r"(elapsed|cpu|buffer gets)\s*[:=]\s*([0-9][0-9,\.]*)", re.IGNORECASE)
+    def upsert(sql_id: str, **kwargs):
+        row = sql_map.setdefault(
+            sql_id,
+            {
+                "sql_id": sql_id,
+                "elapsed": "n/a",
+                "cpu": "n/a",
+                "buffer_gets": "n/a",
+                "sql_text": "SQL text not confidently parsed from uploaded AWR snippet.",
+            },
+        )
+        row.update({k: v for k, v in kwargs.items() if v not in (None, "")})
 
-    for i, line in enumerate(lines):
-        l = line.lower()
-        if "sql id" in l or "sqlid" in l:
-            ids = sqlid_pattern.findall(line)
-            if not ids and i + 1 < len(lines):
-                ids = sqlid_pattern.findall(lines[i + 1])
-            if not ids:
-                continue
-
-            sql_id = ids[0]
-            window = " ".join(lines[i:i + 4])
-            metrics = {k.lower(): v for k, v in metric_pattern.findall(window)}
-            elapsed = metrics.get("elapsed", "n/a")
-            cpu = metrics.get("cpu", "n/a")
-            gets = metrics.get("buffer gets", "n/a")
-
-            sql_text = ""
-            # Search a wider neighborhood around SQL ID to avoid truncating SQL text.
-            start = max(0, i - 5)
-            end = min(len(lines), i + 120)
-            snippet = "\n".join(lines[start:end])
-
-            # Prefer text explicitly following SQL Text / SQL fulltext style markers.
-            marked_match = re.search(
-                r"(?is)(?:sql\s*text\s*[:\-]?\s*)(select\s+.+?|update\s+.+?|delete\s+from\s+.+?|insert\s+into\s+.+?)(?:\n\s*(?:module|action|parsing schema|plan hash value|elapsed time|cpu time|buffer gets|rows processed|fetches|executions)\b|\Z)",
-                snippet,
-            )
-            if marked_match:
-                sql_text = re.sub(r"\s+", " ", marked_match.group(1)).strip()
-            else:
-                generic_match = re.search(
-                    r"(?is)(select\s+.+?|update\s+.+?|delete\s+from\s+.+?|insert\s+into\s+.+?)(?:\n\s*(?:module|action|parsing schema|plan hash value|elapsed time|cpu time|buffer gets|rows processed|fetches|executions)\b|\Z)",
-                    snippet,
-                )
-                if generic_match:
-                    sql_text = re.sub(r"\s+", " ", generic_match.group(1)).strip()
-
-            dominant = "high_elapsed"
-            if cpu != "n/a" and elapsed == "n/a":
-                dominant = "high_cpu"
-            if gets != "n/a" and elapsed == "n/a" and cpu == "n/a":
-                dominant = "high_buffer_gets"
-
-            rows.append(
-                {
-                    "sql_id": sql_id,
-                    "elapsed": elapsed,
-                    "cpu": cpu,
-                    "buffer_gets": gets,
-                    "dominant_issue": dominant.replace("_", " "),
-                    "recommendation": SQL_RECOMMENDATION_MAP[dominant],
-                    "sql_text": sql_text or "SQL text not confidently parsed from uploaded AWR snippet.",
-                }
-            )
-
-    # unique by sql_id while preserving order
-    seen = set()
-    unique_rows = []
-    for r in rows:
-        if r["sql_id"] in seen:
+    elapsed_tbl = _extract_table_by_summary(text, "top SQL by elapsed time")
+    for cols in _parse_table_rows(elapsed_tbl):
+        if len(cols) < 8:
             continue
-        seen.add(r["sql_id"])
-        unique_rows.append(r)
-    return unique_rows[:12]
+        sql_id = cols[6].lower()
+        if not re.fullmatch(r"[0-9a-z]{13}", sql_id):
+            continue
+        upsert(sql_id, elapsed=cols[0], sql_text=cols[9] if len(cols) > 9 else "")
+
+    cpu_tbl = _extract_table_by_summary(text, "top SQL by CPU time")
+    for cols in _parse_table_rows(cpu_tbl):
+        if len(cols) < 9:
+            continue
+        sql_id = cols[7].lower()
+        if not re.fullmatch(r"[0-9a-z]{13}", sql_id):
+            continue
+        upsert(sql_id, cpu=cols[0], elapsed=cols[4], sql_text=cols[10] if len(cols) > 10 else "")
+
+    gets_tbl = _extract_table_by_summary(text, "top SQL by buffer gets")
+    for cols in _parse_table_rows(gets_tbl):
+        if len(cols) < 9:
+            continue
+        sql_id = cols[7].lower()
+        if not re.fullmatch(r"[0-9a-z]{13}", sql_id):
+            continue
+        upsert(sql_id, buffer_gets=cols[0], elapsed=cols[4], sql_text=cols[10] if len(cols) > 10 else "")
+
+    # Full SQL text block extraction (SQL ID -> SQL Text section near end of AWR report)
+    for sql_id, sql_text_html in re.findall(
+        r"<a\s+class=\"awr\"\s+name=\"([0-9a-z]{13})\"\s*>\s*</a>\s*\1\s*</td>\s*<td[^>]*>(.*?)</td>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        cleaned = _clean_html_cell(sql_text_html)
+        if cleaned:
+            upsert(sql_id.lower(), sql_text=cleaned)
+
+    rows: List[Dict] = []
+    for sql_id, r in sql_map.items():
+        elapsed_f = _to_float(r.get("elapsed", "0"))
+        cpu_f = _to_float(r.get("cpu", "0"))
+        gets_f = _to_float(r.get("buffer_gets", "0"))
+        dominant = "high_elapsed"
+        if cpu_f > elapsed_f and cpu_f > gets_f:
+            dominant = "high_cpu"
+        elif gets_f > elapsed_f and gets_f > cpu_f:
+            dominant = "high_buffer_gets"
+
+        rows.append(
+            {
+                "sql_id": sql_id,
+                "elapsed": r.get("elapsed", "n/a"),
+                "cpu": r.get("cpu", "n/a"),
+                "buffer_gets": r.get("buffer_gets", "n/a"),
+                "dominant_issue": dominant.replace("_", " "),
+                "recommendation": SQL_RECOMMENDATION_MAP[dominant],
+                "sql_text": r.get("sql_text") or "SQL text not confidently parsed from uploaded AWR snippet.",
+            }
+        )
+
+    rows.sort(key=lambda x: (_to_float(x["elapsed"]), _to_float(x["cpu"]), _to_float(x["buffer_gets"])), reverse=True)
+    return rows[:12]
 
 
 def _module_status(wait_events: List[Dict], errors: List[str], text: str) -> List[Dict]:
@@ -239,11 +346,14 @@ def run_deterministic_analysis(files: List[Path], user_question: str = "") -> Di
 
     findings = []
     for e in wait_events[:6]:
+        pct = e.get("pct_db_time", 0)
+        waits = e.get("waits", 0)
+        tws = e.get("total_wait_s", 0)
         findings.append(
             {
                 "finding": f"Wait event pressure: {e['event']}",
                 "severity": e["severity"],
-                "evidence": f"Detected {e['hits']} occurrences in uploaded artifacts.",
+                "evidence": f"%DB time={pct}, waits={waits}, total_wait_s={tws}",
                 "business_impact": e["bottleneck"],
             }
         )
@@ -338,6 +448,79 @@ def run_deterministic_analysis(files: List[Path], user_question: str = "") -> Di
     overall = "RED" if any(f["severity"] == "RED" for f in findings) else "YELLOW" if any(f["severity"] == "YELLOW" for f in findings) else "GREEN"
     module_table = _module_status(wait_events, errors, text)
 
+    # Enterprise/audit-friendly confidence model (evidence-count based)
+    evidence_points = len(wait_events) + len(top_sql) + len(errors) + len(sql_signals)
+    base_conf = min(95, 55 + evidence_points * 3)
+    conf_wait = min(98, 50 + len(wait_events) * 5)
+    conf_sql = min(98, 45 + len(top_sql) * 6 + len(sql_signals) * 3)
+    conf_stability = min(98, 50 + len(errors) * 8)
+
+    recommendation_dashboard = [
+        {
+            "title": "Wait & Bottleneck Actions",
+            "value": f"{len(wait_events)} events",
+            "confidence": conf_wait,
+            "status": "RED" if any(w["severity"] == "RED" for w in wait_events) else "YELLOW" if wait_events else "GREEN",
+            "note": "Grounded on explicit wait-event signatures mined from uploaded AWR text.",
+        },
+        {
+            "title": "SQL Optimization Actions",
+            "value": f"{len(top_sql)} SQL IDs",
+            "confidence": conf_sql,
+            "status": "YELLOW" if top_sql else "GREEN",
+            "note": "Based on SQL ID extraction, nearby metrics, and parsed SQL text blocks.",
+        },
+        {
+            "title": "Stability & Error Actions",
+            "value": f"{len(errors)} ORA signatures",
+            "confidence": conf_stability,
+            "status": "RED" if errors else "GREEN",
+            "note": "Derived from ORA error signatures and deterministic remediation mapping.",
+        },
+        {
+            "title": "Overall Recommendation Confidence",
+            "value": f"{len(recommendations)} actions",
+            "confidence": base_conf,
+            "status": overall,
+            "note": "Confidence reflects direct evidence density in the uploaded report artifacts.",
+        },
+    ]
+
+    module_evidence = []
+    for m in module_table:
+        name = m["module"]
+        evidence = []
+        if "Load" in name and wait_events:
+            evidence.append(f"Wait events mined: {len(wait_events)}")
+        if "Top SQL" in name and top_sql:
+            evidence.append(f"Top SQL mined: {len(top_sql)}")
+        if "Wait Events" in name and wait_events:
+            evidence.append(", ".join([w["event"] for w in wait_events[:3]]))
+        if "Redo" in name and any(w["event"] in ["log file sync", "log file parallel write"] for w in wait_events):
+            evidence.append("Detected log file sync/log file parallel write")
+        if "IO" in name and any(w["category"] == "IO" for w in wait_events):
+            evidence.append("Detected IO wait signatures")
+        if "Memory" in name and ("pga" in ltext or "sga" in ltext):
+            evidence.append("Detected PGA/SGA markers")
+        if "Concurrency" in name and any("lock" in w["event"] for w in wait_events):
+            evidence.append("Detected lock-related waits")
+        if "Alert" in name and errors:
+            evidence.append(", ".join(errors[:3]))
+        if "Privilege" in name and ("grant dba" in ltext or "sysdba" in ltext):
+            evidence.append("Detected high-privilege markers (GRANT DBA/SYSDBA)")
+        if "Quick Wins" in name and recommendations:
+            evidence.append(f"Generated actions: {len(recommendations)}")
+
+        module_evidence.append(
+            {
+                "module": name,
+                "status": m["status"],
+                "evidence": "; ".join(evidence) if evidence else "No strong direct marker found in uploaded snippet.",
+                "confidence": min(95, 50 + len(evidence) * 12),
+                "grounding": "AWR text pattern match",
+            }
+        )
+
     return {
         "executive_summary": "Deterministic Oracle AWR miner completed. Top waits, error signatures, and SQL pressure indicators were correlated into a practical action plan.",
         "overall_severity": overall,
@@ -346,6 +529,8 @@ def run_deterministic_analysis(files: List[Path], user_question: str = "") -> Di
         "findings_table": findings,
         "module_status_table": module_table,
         "recommendations_table": recommendations,
+        "recommendation_dashboard": recommendation_dashboard,
+        "module_evidence_table": module_evidence,
         "awr_highlights": highlights,
         "focus": user_question or "General Oracle performance triage",
     }

@@ -17,6 +17,11 @@
       pre { background: #f7fbff; padding: 10px; border-radius: 8px; overflow: auto; border: 1px solid #dbe7f6; }
       a { color: #2f67e3; }
       .back-btn { background:#2f67e3; color:#fff; border:none; border-radius:8px; padding:10px 14px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
+      .dash-grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+      .dash-card { border-radius:12px; padding:12px; border:1px solid #d9e1ec; }
+      .dash-red { background:#fff1f1; border-color:#ffc7c7; }
+      .dash-yellow { background:#fff9ea; border-color:#ffe3a3; }
+      .dash-green { background:#eefbf3; border-color:#bfeacb; }
     </style>
   </head>
   <body>
@@ -32,6 +37,20 @@
       <div class="card">
         <h3>Executive Summary</h3>
         <p>{{ result.executive_summary }}</p>
+      </div>
+
+      <div class="card">
+        <h3>Recommendation Confidence Dashboard</h3>
+        <div class="dash-grid">
+          {% for d in result.recommendation_dashboard %}
+          <div class="dash-card dash-{{ d.status|lower }}">
+            <div><b>{{ d.title }}</b></div>
+            <div>{{ d.value }}</div>
+            <div>Confidence: <b>{{ d.confidence }}%</b></div>
+            <div style="font-size:0.9rem">{{ d.note }}</div>
+          </div>
+          {% endfor %}
+        </div>
       </div>
 
       <div class="card">
