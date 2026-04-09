@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ app_name }}</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #0b1020; color: #e6edf7; }
+      .container { max-width: 1050px; margin: 24px auto; padding: 20px; }
+      .card { background: #141a2e; border: 1px solid #28314f; border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+      .title { font-size: 1.6rem; font-weight: 700; margin-bottom: 8px; }
+      .muted { color: #a8b2c8; }
+      .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #1f2742; margin-right: 8px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+      .module { background: #1a223b; border: 1px solid #2e3a62; border-radius: 10px; padding: 10px; }
+      input, textarea { width: 100%; margin-top: 8px; margin-bottom: 14px; border-radius: 8px; border: 1px solid #36436d; background: #0e1529; color: white; padding: 10px; }
+      button { background: #4f7cff; color: white; border: 0; border-radius: 8px; padding: 12px 16px; font-weight: 700; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="title">🔒 {{ app_name }}</div>
+        <p class="muted">AI-Powered Oracle Insights — No DB Connection, No Credentials, No Network Exposure.</p>
+        <span class="pill">Provider: {{ provider }}</span>
+        <span class="pill">Model: {{ model }}</span>
+      </div>
+
+      <div class="card">
+        <h3>Upload & Analyze</h3>
+        <p class="muted">Supported files: HTML, TXT, CSV, LOG, SQL</p>
+        <form action="/analyze" method="post" enctype="multipart/form-data">
+          <label>Analysis Mode</label>
+          <select name="analysis_mode" style="width:100%; margin-top:8px; margin-bottom:14px; border-radius:8px; border:1px solid #36436d; background:#0e1529; color:white; padding:10px;">
+            <option value="ai" selected>AI Analysis (LLM-based)</option>
+            <option value="non-ai">Non-AI Analysis (deterministic rules)</option>
+          </select>
+
+          <label>Artifacts (AWR / SQL / alert logs / privileges)</label>
+          <input type="file" name="files" multiple required />
+
+          <label>Focus Question (Optional)</label>
+          <textarea name="question" rows="4" placeholder="e.g., Why did DB time spike at 2 PM and what are the top 3 fixes?"></textarea>
+
+          <button type="submit">Run 10-Module Analysis</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Analysis Modules</h3>
+        <div class="grid">
+          {% for m in modules %}
+            <div class="module">{{ loop.index }}. {{ m }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </body>
+  </html>

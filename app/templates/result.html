@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ app_name }} - Result</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #070b16; color: #e7eefc; }
+      .container { max-width: 1120px; margin: 24px auto; padding: 20px; }
+      .card { background: #121a31; border: 1px solid #2a3862; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+      .top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+      .pill { background: #1d2746; border-radius: 999px; padding: 5px 10px; }
+      .finding { border-left: 4px solid #4f7cff; padding-left: 10px; margin-bottom: 10px; }
+      .sev-red { color: #ff7b7b; } .sev-yellow { color: #ffd86b; } .sev-green { color: #7dffad; }
+      ul { margin-top: 6px; }
+      pre { background: #0b1225; padding: 10px; border-radius: 8px; overflow: auto; border: 1px solid #2f3f6e; }
+      a { color: #8bb3ff; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card top">
+        <h2>Oracle AI Analyst Report</h2>
+        <div>
+          <span class="pill">Provider: {{ provider }}</span>
+          <span class="pill">Model: {{ model }}</span>
+          <span class="pill">Mode: {{ analysis_mode }}</span>
+          <span class="pill">Overall: {{ severity_badge(result.overall_severity) }} {{ result.overall_severity }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Executive Summary</h3>
+        <p>{{ result.executive_summary }}</p>
+      </div>
+
+      <div class="card">
+        <h3>Top Findings</h3>
+        {% for f in result.top_findings %}
+          {% set sev = (f.severity or 'YELLOW')|lower %}
+          <div class="finding">
+            <strong>{{ severity_badge(f.severity) }} {{ f.title }}</strong>
+            <div class="sev-{{ sev }}">Severity: {{ f.severity }} | Priority: {{ f.priority }}</div>
+            <div><b>Evidence:</b> {{ f.evidence }}</div>
+            <div><b>Recommendation:</b> {{ f.recommendation }}</div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="card">
+        <h3>10-Module Insights</h3>
+        {% for m in result.module_insights %}
+          <div class="finding">
+            <strong>{{ severity_badge(m.status) }} {{ m.module }}</strong>
+            <div>{{ m.insight }}</div>
+            <ul>
+              {% for a in m.actions %}
+                <li>{{ a }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="card">
+        <h3>Optimization Plan</h3>
+        {% for p in result.optimization_plan %}
+          <div class="finding">
+            <strong>{{ p.phase }}</strong>
+            <ul>
+              {% for t in p.tasks %}
+                <li>{{ t }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="card">
+        <h3>Questions for You</h3>
+        <ul>
+          {% for q in result.questions_for_user %}
+            <li>{{ q }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Raw JSON</h3>
+        <pre>{{ raw_json }}</pre>
+      </div>
+
+      <div class="card"><a href="/">← Analyze another file set</a></div>
+    </div>
+  </body>
+  </html>
